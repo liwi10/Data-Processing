@@ -1,0 +1,817 @@
+---
+title: "Datenauswertung"
+output: html_notebook
+---
+
+*Data Pre-Processing*
+
+On basis of the responses to the survey, these responses were loaded from the csv-file.
+
+```{r}
+library(readr)
+
+answers <- read_csv("Daten.csv")
+
+```
+
+The irrelevant columns are removed.
+
+```{r}
+
+answers[1:3] <- list(NULL)
+answers[2:4] <- list(NULL)
+answers[3:14] <- list(NULL)
+
+```
+
+The different characteristics of the column "Status" are displayed with their count.
+
+```{r}
+
+library(dplyr)
+
+answers %>%
+  group_by(Status) %>%
+  summarize(count=n())
+
+```
+
+The second row is removed.
+
+```{r}
+
+answers <- answers[-c(2),]
+
+```
+
+The rows with the status "Umfragenvorschau" are removed because they are irrelevant.
+
+```{r}
+
+answers <- answers[!(answers$Status=='Umfragenvorschau'),]
+
+```
+
+The columns are renamed.
+
+```{r}
+
+newNames <- c("Status","Finished","Kauf_A1","GemüseA1_1","GemüseA1_2","GemüseA1_3",
+              "GemüseA1_4","GemüseA1_5","Preis_A1","Kauf_A2","GemüseA2_1","GemüseA2_2","GemüseA2_3",
+              "GemüseA2_4","GemüseA2_5","Preis_A2","Kauf_B1","GemüseB1_1","GemüseB1_2","GemüseB1_3",
+              "GemüseB1_4","GemüseB1_5","Preis_B1","Kauf_B2","GemüseB2_1","GemüseB2_2","GemüseB2_3",
+              "GemüseB2_4","GemüseB2_5","Preis_B2","Klima1","Klima2","Klima3","Klima4","Klima5","Klima6",
+              "Alter","Geschlecht","Bildung","Einkommen","Ernährung1","Ernährung2","Beschäftigung")
+
+names(answers) <- newNames
+
+```
+
+The responses to the Likert scales are transformed in numerical values.
+
+```{r}
+
+answers <- answers %>%
+  mutate(across(c(3,10,17,24), ~ case_match(
+  .,
+  "Eindeutig A" ~ -2,
+  "Eher A" ~ -1,
+  "Ist mir egal" ~ 0,
+  "Eher B" ~ 1,
+  "Eindeutig B" ~ 2
+)))
+
+```
+
+```{r}
+
+answers <- answers %>%
+  mutate(across(contains("Gemüse"),  ~ dplyr::recode(
+    .,
+  "Viel schlechter als A" = -2,
+  "Eher schlechter als A" = -1,
+  "Ungefähr gleich" = 0,
+  "Eher besser als A" = 1,
+  "Viel besser als A" = 2,
+  .default = 1000
+)))
+
+```
+
+The prices are transformed in the form "X.XX" and saved as a numeric datatype.
+
+```{r}
+
+answers[,grep("Preis",colnames(answers))] <- lapply(answers[,grep("Preis",colnames(answers))], gsub, pattern="€",replacement="")
+answers[,grep("Preis",colnames(answers))] <- lapply(answers[,grep("Preis",colnames(answers))], gsub, pattern=",",replacement=".")
+answers <- answers %>%
+  mutate_at(grep("Preis",colnames(.)),as.numeric)
+
+```
+
+Also the responses to the awareness of climate change and to the eating form are transformed in numerical values.
+
+```{r}
+
+answers <- answers %>%
+  mutate(across(contains("Klima"),  ~ dplyr::recode(
+    .,
+  "Stimme überhaupt nicht zu" = -2,
+  "Stimme teilweise nicht zu" = -1,
+  "Weder noch" = 0,
+  "Stimme teilweise zu" = 1,
+  "Stimme voll zu" = 2,
+  .default = 1000
+)))
+
+answers <- answers %>%
+  mutate(Ernährung1_kodiert = dplyr::recode(Ernährung1,"Konventionell"=1,"Vegetarisch"=2,"Vegan"=3,"Sonstiges (Bitte angeben)"=4), .after = Ernährung1)
+
+answers <- answers %>%
+  mutate(Ernährung2_kodiert=case_when(
+    grepl("vegetarisch", Ernährung2)~2,
+    grepl("Bio", Ernährung2)~2,
+    is.na(Ernährung2)~NA,
+    .default = 1),
+    .after = Ernährung2)
+
+```
+
+To remove the unfinished responses they are filtered out.
+
+```{r}
+answers <- answers[!(answers$Finished=="Falsch" & is.na(answers$Beschäftigung) & (is.na(answers$Preis_A2) & is.na(answers$Preis_B2))),]
+```
+
+```{r}
+mean(answers$Klima1, na.rm = TRUE)
+```
+
+The variables for the second vegetable of survey B is reversed because the suboptimal vegetable is here contrasting to the other displays on the left side and the Likert scale has to be reversed.
+
+```{r}
+
+answers <- answers %>%
+  mutate(across(contains("B2"), function(x) x * -1)) 
+
+answers$Preis_B2 <- answers$Preis_B2 * -1
+
+```
+
+As described above, the Likert scale has to be reversed for some statements regarding the awareness of climate change.
+
+```{r}
+
+answers <- answers %>%
+  mutate(across(contains("Klima"), function(x) x * -1)) 
+
+answers$Klima1 <- answers$Klima1 * -1
+answers$Klima6 <- answers$Klima6 * -1
+
+```
+
+An unnecessary row is removed.
+
+```{r}
+
+answers <- answers[!answers$Status=="Antworttyp",]
+
+```
+
+**Demographic visualization**
+
+The demographic variables are extracted and transformed into a table with counts and percentages.
+
+```{r}
+
+demoNames <- c("Alter","Geschlecht","Bildung","Einkommen","Ernährung1","Beschäftigung")
+
+demographics <- answers[demoNames]
+
+```
+
+```{r}
+demoStats <- setNames(data.frame(matrix(ncol = 3, nrow = 0)), c("Var1", "Freq", "Prop"))
+
+for (i in colnames(demographics)){
+  df <- as.data.frame(table(answers[i]))
+  df["Prop"] <- prop.table(table(answers[i]))
+  demoStats <- rbind(demoStats, df)
+}
+
+demoStats <- demoStats %>%
+  rename("Category"="Var1",
+         "Frequency"="Freq",
+         "Percentage"="Prop")
+
+demoStats$Percentage <- round(demoStats$Percentage * 100, digits=1)
+
+```
+
+```{r}
+library("gt")
+
+demoTable <- demoStats %>%
+  gt() %>%
+  tab_row_group(label = "Annual income",
+                rows=c(15:25)) %>%
+  tab_row_group(label = "Employment status",
+                rows = c(30:34)) %>%
+  tab_row_group(label = "Educational Background",
+                rows = c(10:14)) %>%
+  tab_row_group(label = "Form of nutrition",
+                rows=c(26:29)) %>%
+  tab_row_group(label="Gender",
+                rows=c(7:9)) %>%
+  tab_row_group(label = "Age",
+     rows = c(1:6))
+
+```
+
+```{r}
+
+demoTable <- demoTable %>%
+  cols_align(
+    align = "auto",
+    columns = c("Category")
+  ) %>%
+  cols_align(
+    align = "right",
+    columns = c("Frequency","Percentage")
+  ) %>%
+  cols_width(
+    c(Category) ~ px(210),
+    c(Frequency) ~ px(100),
+    c(Percentage) ~ px(100),
+  ) %>%
+  opt_row_striping()
+
+```
+
+```{r}
+
+demoTable <- demoTable %>%
+  tab_header(
+    title = "Demographic profile of the respondents (n=175)"
+  )
+
+```
+
+```{r}
+
+demoTable <- demoTable %>%
+  tab_options(
+  table.font.name = "Times New Roman",
+  table.font.color = "#000000",
+  table.border.top.style = "none",
+  table.border.bottom.style = "solid",
+  table.border.bottom.color = "#232b2b",
+  table.border.bottom.width = px(3),
+  column_labels.border.top.color = "white",
+  column_labels.border.top.width = px(3),
+  column_labels.border.bottom.color = "#000000",
+  column_labels.border.bottom.width = px(3),
+  data_row.padding = px(10)
+ ) %>% 
+ tab_style(
+  style = list(
+   cell_text(
+    size = px(13),
+    weight = "bold",
+    align = "left",
+    font = "Times New Roman"
+   )
+  ),
+  locations = list(
+   cells_title(groups = "title")
+  )
+ ) %>% 
+ tab_style(
+  style = list(
+   cell_text(
+    size = px(11),
+    align = "left"
+   )
+  ),
+  locations = list(
+   cells_title(groups = "subtitle")
+  )
+ ) %>% 
+ tab_style(
+  style = list(
+   cell_text(
+    size = px(11)
+   ),
+   cell_borders(
+    sides = c("bottom", "top"),
+    color = "#000000",
+    weight = px(1)
+   )
+  ),
+  locations = list(
+   cells_body(gt::everything())
+  )
+ ) %>% 
+ tab_style(
+  style = list( 
+   cell_text(
+    size = px(11),
+    weight = "bold",
+    color = "#232b2b",
+    font = "Times New Roman"
+   )
+  ),
+  locations = list(
+   cells_column_labels(everything())
+  )
+ ) %>% 
+ tab_style(
+  style = list( 
+   cell_text(
+    size = px(11),
+    weight = "bold",
+    color = "#232b2b",
+    font = "Times New Roman"
+   ),
+   cell_borders(
+    sides = c("bottom"),
+    style = "solid",
+    color = "#000000",
+    weight = px(2)
+   )
+  ),
+  locations = list(
+   cells_row_groups(gt::everything())
+  )
+ ) %>% 
+ tab_style(
+  style = list( 
+   cell_text(
+    size = px(11),
+    color = "#000000",
+    font = "Times New Roman"
+   ),
+   cell_borders(
+    sides = c("bottom", "right"),
+    style = "solid",
+    color = "white",
+    weight = px(1)
+   )
+  ),
+  locations = list(
+   cells_stub(gt::everything()),
+   cells_stubhead()
+  )
+ ) %>% 
+ tab_style(
+  style = list(
+   cell_text(
+    font = "Times New Roman", size = px(11), 
+    color = "#000000")
+  ),
+  location = list(
+   cells_body(columns = vars(Category))
+  )
+ ) 
+
+demoTable
+
+```
+
+*Hypotheses testing*
+
+Subsequently, the hypotheses are tested.
+
+**Hypothesis 1**
+
+For the first hypothesis the willingness to buy and to pay for suboptimal vegetables are defined in two variables.
+Furthermore, Shapiro-Wilk normality tests are conducted to check the normal distribution of the data. 
+The mean and the standard deviation are calculated.
+
+```{r}
+
+h1K <- as.vector(as.matrix(answers[,c(3,17)]))
+h1Z <- as.vector(as.matrix(answers[,c(9,23)]))
+shapiro.test(h1K)
+shapiro.test(h1Z)
+mean(h1K, na.rm = TRUE)
+sd(h1K, na.rm = TRUE)
+mean(h1Z, na.rm = TRUE)
+sd(h1Z, na.rm = TRUE)
+
+```
+
+As the data isn't normally distributed, a non-parametric test in form of the Wilcoxon signed rank test has to be conducted.
+
+```{r}
+
+wilcox.test(h1K, alternative = "less", mu=0)
+wilcox.test(h1Z, alternative = "less", mu=2.50)
+
+```
+
+**Hypothesis 2**
+
+For the second hypothesis the according variables are combined to a healthiness scale and a Shapiro-Wilk normality test is conducted.
+
+```{r}
+
+h2 <- as.vector(as.matrix(answers[,c(4,6,8,18,20,22)]))
+shapiro.test(h2)
+mean(h2, na.rm = TRUE)
+sd(h2, na.rm = TRUE)
+
+```
+
+As the data isn't normally distributed, a non-parametric test in form of the Wilcoxon signed rank test has to be conducted again.
+
+```{r}
+
+wilcox.test(h2, alternative = "less", mu=0)
+
+```
+
+**Hypothese 3**
+
+For the third hypotheses, the averages for the perceived healthiness and for the awareness of climate change are calculated.
+
+```{r}
+
+answers$GemüseAvg <- rowMeans(answers[,c(4,6,8,18,20,22)], na.rm = TRUE)
+answers$KlimaAvg <- rowMeans(answers[,c(31:36)],na.rm=TRUE)
+
+```
+
+The two variables are visualized in a scatterplot.
+
+```{r}
+library("car")
+scatterplot(GemüseAvg ~ KlimaAvg, data=answers, smooth=FALSE, grid=FALSE, frame=FALSE, col = "black")
+
+```
+
+A linear regression is conducted.
+
+```{r}
+
+h3.lm <- lm(GemüseAvg ~ KlimaAvg, data = answers)
+summary(h3.lm)
+
+```
+
+On top of the linear regression Kendall's rank correlation tau and Spearman's rank correlation rho are calculated.
+
+```{r}
+
+cor.test(answers$GemüseAvg, answers$KlimaAvg, method="kendall")
+cor.test(answers$GemüseAvg, answers$KlimaAvg, method="spearman")
+
+```
+
+**Hypothesis 4**
+
+As in hypothesis 3, this time the average willingness to buy and pay are calculated.
+
+```{r}
+
+answers$KaufAvg <- rowMeans(answers[,c(3,17)], na.rm = TRUE)
+answers$ZahlAvg <- rowMeans(answers[,c(9,23)],na.rm=TRUE)
+
+```
+
+The variables are visualized in a scatterplot.
+
+```{r}
+
+par(mfrow=c(1,2))
+scatterplot(KaufAvg ~ KlimaAvg, data=answers, smooth=FALSE, grid=FALSE, frame=FALSE, col = "black")
+scatterplot(ZahlAvg ~ KlimaAvg, data=answers, smooth=FALSE, grid=FALSE, frame=FALSE, col = "black")
+
+```
+
+A linear regression is conducted.
+First for the willingness to buy.
+
+```{r}
+
+h4K.lm <- lm(KaufAvg ~ KlimaAvg, data = answers)
+summary(h4K.lm)
+
+```
+
+Afterwards for the willingness to pay.
+
+```{r}
+
+h4Z.lm <- lm(ZahlAvg ~ KlimaAvg, data = answers)
+summary(h4Z.lm)
+
+```
+
+Again, the correlation coefficients are calculated.
+
+```{r}
+
+cor.test(answers$KaufAvg, answers$KlimaAvg, method="kendall")
+cor.test(answers$KaufAvg, answers$KlimaAvg, method="spearman")
+cor.test(answers$ZahlAvg, answers$KlimaAvg, method="kendall")
+cor.test(answers$ZahlAvg, answers$KlimaAvg, method="spearman")
+
+```
+
+**Hypothese 5**
+
+For hypothesis 5, the willingness to buy and pay have to be separated into vegetarian and vegan consumers on the one side and conventional eaters on the other side.
+
+```{r}
+
+answers <- answers %>%
+  mutate(VegKaufAvg=if_else(Ernährung1_kodiert==2 | Ernährung1_kodiert==3 | Ernährung2_kodiert==2,
+                            rowMeans(answers[,c(3,17)], na.rm = TRUE),
+                            NA))
+
+answers <- answers %>%
+  mutate(VegZahlAvg=if_else(Ernährung1_kodiert==2 | Ernährung1_kodiert==3 | Ernährung2_kodiert==2,
+                            rowMeans(answers[,c(9,23)], na.rm = TRUE),
+                            NA))
+answers <- answers %>%
+  mutate(KonvKaufAvg=if_else(Ernährung1_kodiert==1 | Ernährung2_kodiert==1,
+                            rowMeans(answers[,c(3,17)], na.rm = TRUE),
+                            NA))
+
+answers <- answers %>%
+  mutate(KonvZahlAvg=if_else(Ernährung1_kodiert==1 | Ernährung2_kodiert==1,
+                            rowMeans(answers[,c(9,23)], na.rm = TRUE),
+                            NA))
+
+```
+
+Afterwards, Shapiro-Wilk normality tests as well as means and standard deviations are calculated.
+
+```{r}
+
+shapiro.test(answers$VegKaufAvg)
+shapiro.test(answers$KonvKaufAvg)
+shapiro.test(answers$VegZahlAvg)
+shapiro.test(answers$KonvZahlAvg)
+
+mean(answers$VegKaufAvg, na.rm = TRUE)
+sd(answers$VegKaufAvg, na.rm = TRUE)
+mean(answers$KonvKaufAvg, na.rm = TRUE)
+sd(answers$KonvKaufAvg, na.rm = TRUE)
+mean(answers$VegZahlAvg, na.rm = TRUE)
+sd(answers$VegZahlAvg, na.rm = TRUE)
+mean(answers$KonvZahlAvg, na.rm = TRUE)
+sd(answers$KonvZahlAvg, na.rm = TRUE)
+
+```
+
+Wilcoxon rank sum tests have to be conducted.
+
+```{r}
+
+wilcox.test(answers$VegKaufAvg, answers$KonvKaufAvg, alternative="greater")
+wilcox.test(answers$VegZahlAvg, answers$KonvZahlAvg, alternative="greater")
+
+```
+
+**Hypothese 6**
+
+Firstly, we regard the willingness to buy. 
+Shapiro-Wilk normality tests as well as means and standard deviations are calculated.
+
+```{r}
+
+shapiro.test(answers$Kauf_A1)
+shapiro.test(answers$Kauf_A2)
+mean(answers$Kauf_A1, na.rm = TRUE)
+sd(answers$Kauf_A1, na.rm = TRUE)
+mean(answers$Kauf_A2, na.rm = TRUE)
+sd(answers$Kauf_A2, na.rm = TRUE)
+
+```
+
+This time a paired Wilcoxon signed rank test has to be used.
+
+```{r}
+
+wilcox.test(answers$Kauf_A1, answers$Kauf_A2, paired = TRUE, alternative = "less")
+
+```
+
+For the willingness to pay the variables have to be normalized in order to guarantee the comparability. So the indicated prices from the participants are divided by the reference prices.
+
+```{r}
+
+answers$Preis_A1_norm <- answers$Preis_A1 / 2.50
+answers$Preis_B1_norm <- answers$Preis_B1 / 2.50
+answers$Preis_A2_norm <- answers$Preis_A2 / 2.29
+answers$Preis_B2_norm <- answers$Preis_B2 / 1.75
+
+```
+
+Shapiro-Wilk normality tests as well as means and standard deviations are calculated.
+
+```{r}
+
+shapiro.test(answers$Preis_A1_norm)
+shapiro.test(answers$Preis_A2_norm)
+
+mean(answers$Preis_A1_norm, na.rm = TRUE)
+sd(answers$Preis_A1_norm, na.rm = TRUE)
+mean(answers$Preis_A2_norm, na.rm = TRUE)
+sd(answers$Preis_A2_norm, na.rm = TRUE)
+
+```
+
+A paired Wilcoxon signed rank test has to be used.
+
+```{r}
+
+wilcox.test(answers$Preis_A1_norm, answers$Preis_A2_norm, paired = TRUE, alternative = "less")
+
+```
+
+**Hypothesis 7**
+
+Hypothesis 7 is tested analogous to Hypothesis 6.
+Firstly, Shapiro-Wilk normality tests, means and standard deviations are calculated.
+
+```{r}
+
+shapiro.test(answers$Kauf_B1)
+shapiro.test(answers$Kauf_B2)
+shapiro.test(answers$Preis_B1_norm)
+shapiro.test(answers$Preis_B2_norm)
+
+mean(answers$Kauf_B1, na.rm = TRUE)
+sd(answers$Kauf_B1, na.rm = TRUE)
+mean(answers$Kauf_B2, na.rm = TRUE)
+sd(answers$Kauf_B2, na.rm = TRUE)
+mean(answers$Preis_B1_norm, na.rm = TRUE)
+sd(answers$Preis_B1_norm, na.rm = TRUE)
+mean(answers$Preis_B2_norm, na.rm = TRUE)
+sd(answers$Preis_B2_norm, na.rm = TRUE)
+
+```
+
+Afterwards, paired Wilcoxon signed rank tests are calculated.
+
+```{r}
+
+wilcox.test(answers$Kauf_B1, answers$Kauf_B2, paired = TRUE, alternative = "less")
+wilcox.test(answers$Preis_B1_norm, answers$Preis_B2_norm, paired = TRUE, alternative = "less")
+
+```
+
+**Further calculations**
+
+***Discount***
+
+```{r}
+
+discP <- (2.5 - mean(answers$Preis_A1, na.rm = TRUE)) /2.5
+discC <- (2.29 - mean(answers$Preis_A2, na.rm = TRUE)) /2.29
+discP2 <- (2.5 - mean(answers$Preis_B1, na.rm = TRUE)) /2.5
+discB <- (1.75 - mean(answers$Preis_B2, na.rm = TRUE)) /1.75
+mean(c(discP,discC,discP2,discB))
+
+```
+
+***Health perceptions with & without label***
+
+```{r}
+
+healthPre <- as.vector(as.matrix(answers[,c(4,6,8,18,20,22)]))
+healthPost <- as.vector(as.matrix(answers[,c(11,13,15,25,27,29)]))
+
+shapiro.test(healthPre)
+shapiro.test(healthPost)
+
+wilcox.test(healthPre, healthPost, paired = TRUE, alternative = "less")
+
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(answers$KlimaAvg, answers$Kauf_A1, xlab="awareness of climate change", ylab="willingness to buy",
+     main="without label")
+abline(lm(Kauf_A1 ~ KlimaAvg, data = answers))
+plot(answers$KlimaAvg, answers$Kauf_A2, xlab="awareness of climate change", ylab="willingness to buy",
+     main="with label")
+abline(lm(Kauf_A2 ~ KlimaAvg, data = answers))
+
+```
+***Age***
+
+```{r}
+
+answers %>%
+  group_by(Alter) %>%
+  summarize(count=n())
+
+```
+
+```{r}
+
+answers <- answers %>%
+  mutate(Alter_code=dplyr::recode(Alter,
+  "18 - 24 Jahre" = 1,
+  "25 - 34 Jahre" = 2,
+  "35 - 44 Jahre" = 3,
+  "45 - 54 Jahre" = 4,
+  "55 - 64 Jahre" = 5,
+  "65 - 74" = 6
+))
+
+```
+
+```{r}
+
+plot(answers$Alter_code, answers$KaufAvg, ylab="Willingness to buy", xlab = "Age", xaxt="n", main="WTB per age group")
+axis(1, at=1:6, labels=c("18 - 24","25 - 34","35 - 44","45 - 54","55 - 64","65 - 74"))
+abline(lm(KaufAvg ~ Alter_code, data = answers))
+
+```
+
+```{r}
+
+plot(answers$Alter_code, answers$GemüseAvg, ylab="Healthiness perceptions", xlab = "Age", xaxt="n", main="Healthiness perceptions per age group")
+axis(1, at=1:6, labels=c("18 - 24","25 - 34","35 - 44","45 - 54","55 - 64","65 - 74"))
+abline(lm(GemüseAvg ~ Alter_code, data = answers))
+
+```
+
+***Gender***
+
+```{r}
+
+answers %>%
+  group_by(Geschlecht) %>%
+  summarize(count=n())
+
+```
+
+```{r}
+
+
+answers <- answers %>%
+  mutate(Geschlecht_code=dplyr::recode(Geschlecht,
+  "Weiblich" = 1,
+  "Männlich" = 2
+))
+
+```
+
+```{r}
+
+femaleWTB <- answers[answers$Geschlecht_code == 1,]$KaufAvg
+femaleHP <- answers[answers$Geschlecht_code == 1,]$GemüseAvg
+femaleCA <- answers[answers$Geschlecht_code == 1,]$KlimaAvg
+maleWTB <- answers[answers$Geschlecht_code == 2,]$KaufAvg
+maleHP <- answers[answers$Geschlecht_code == 2,]$GemüseAvg
+maleCA <- answers[answers$Geschlecht_code == 2,]$KlimaAvg
+
+```
+
+
+```{r}
+
+shapiro.test(femaleWTB)
+mean(femaleWTB, na.rm = TRUE)
+sd(femaleWTB, na.rm = TRUE)
+shapiro.test(maleWTB)
+mean(maleWTB, na.rm = TRUE)
+sd(maleWTB, na.rm = TRUE)
+
+wilcox.test(maleWTB, femaleWTB, alternative = "less")
+
+```
+
+```{r}
+
+shapiro.test(femaleHP)
+mean(femaleHP, na.rm = TRUE)
+sd(femaleHP, na.rm = TRUE)
+shapiro.test(maleHP)
+mean(maleHP, na.rm = TRUE)
+sd(maleHP, na.rm = TRUE)
+
+wilcox.test(femaleHP, maleHP, alternative = "less")
+
+```
+
+```{r}
+
+shapiro.test(femaleCA)
+mean(femaleCA, na.rm = TRUE)
+sd(femaleCA, na.rm = TRUE)
+shapiro.test(maleCA)
+mean(maleCA, na.rm = TRUE)
+sd(maleCA, na.rm = TRUE)
+
+wilcox.test(maleCA, femaleCA, alternative = "less")
+
+```
+
+
